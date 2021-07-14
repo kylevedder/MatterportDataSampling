@@ -89,8 +89,8 @@ def save_pc(config, depth_obs, filename):
 
     
     
-def gen_entry(idx, rgb_file, pc_file, rgb_observations, objects):
-    d = {
+def gen_entries(idx, rgb_file, pc_file, rgb_observations, objects, desired_object):
+    info_entry = {
     "image" : {
         "image_idx" : idx,
         "image_path" : rgb_file + ".png",
@@ -110,22 +110,33 @@ def gen_entry(idx, rgb_file, pc_file, rgb_observations, objects):
         "velodyne_path" : pc_file + ".bin"
     },
     "annos" : {
-        "name" : [o.category.name() for o in objects],
+        "name" : np.array([o.category.name() for o in objects]),
         "truncated" : np.zeros(len(objects)),
         "occluded" : np.zeros(len(objects)),
         "alpha" : np.ones(len(objects)) * -10,
-        "bbox" : np.zeros((4, len(objects))),
-        "dimensions" : [o.obb.half_extents for o in objects],
-        "location" : [o.obb.center for o in objects],
+        "bbox" : np.zeros((len(objects), 4)), # IDK what this is
+        "dimensions" : np.array([o.obb.half_extents for o in objects]),
+        "location" : np.array([o.obb.center for o in objects]),
         "rotation_y" : np.zeros(len(objects)),
         "score" : np.zeros(len(objects)),
-        "index" : list(range(len(objects))),
-        "group_ids" : list(range(len(objects))),
+        "index" : np.array(range(len(objects))),
+        "group_ids" : np.array(range(len(objects))),
         "difficulty" : np.zeros(len(objects)),
-        "num_points_in_gt" : np.zeros(len(objects)),
+        "num_points_in_gt" : np.zeros(len(objects))
     }
     }
-    return d
+    extract_y = lambda rot: Rotation.from_quat(rot).as_euler('yxz', degrees=True)[:1]
+    dbinfo_obj_entries = [{
+            "name" : desired_object,
+            "path" : pc_file + ".bin",
+            "image_idx" : idx,
+            "gt_idx" : 0, # IDK what this is
+            "box3d_lidar" : np.concatenate([o.obb.center, o.obb.half_extents, extract_y(o.obb.rotation)]),
+            "num_points_in_gt": 0, 
+            "difficulty": 0, 
+            "group_id": 0
+    } for o in objects]
+    return info_entry, dbinfo_obj_entries
 
 
 def main(dataset_folder, desired_object):
@@ -136,7 +147,8 @@ def main(dataset_folder, desired_object):
         print("Environment creation successful")
         print("Agent acting inside environment.")
         episode_idx = 0
-        data_entries = []
+        info_entries = []
+        dbinfo_entries = []
         while episode_idx < 10:
             observations = env.reset()
 
@@ -147,7 +159,6 @@ def main(dataset_folder, desired_object):
             # https://aihabitat.org/docs/habitat-sim/habitat_sim.scene.SemanticObject.html
             # Idea from https://github.com/facebookresearch/habitat-sim/issues/263#issuecomment-537295069            
             instance_id_to_obj = {int(obj.id.split("_")[-1]): obj for obj in scene.objects}
-            to_catagory_id = np.vectorize(lambda e: instance_id_to_obj[e].category.index())
             # Extract the unique objects, get their Object Bounding Boxes.
             # https://aihabitat.org/docs/habitat-sim/habitat_sim.geo.OBB.html
             distinct_objects = [instance_id_to_obj[instance_id] for instance_id in set(observations["semantic"].flatten())]
@@ -170,17 +181,24 @@ def main(dataset_folder, desired_object):
                     observations["depth"],
                     pc_file)
 
-            data_entries.append(gen_entry(episode_idx, 
-                                          rgb_file, 
-                                          pc_file, 
-                                          observations["rgb"], 
-                                          distinct_objects))
+            info_entry, dbinfo_entries_sublist = gen_entries(episode_idx, 
+                                                       rgb_file, 
+                                                       pc_file, 
+                                                       observations["rgb"], 
+                                                       filtered_objects, 
+                                                       desired_object)
+            info_entries.append(info_entry)            
+            dbinfo_entries.extend(dbinfo_entries_sublist)
             episode_idx += 1
         
-        # Save to database.
-        with open(dataset_folder + "/database.pkl", "wb") as db:
-            pickle.dump(data_entries, db)
-
+        # Save to "infos" file.
+        with open(dataset_folder + "/infos.pkl", "wb") as f:
+            pickle.dump(info_entries, f)
+        
+        # Save to "dbinfos" file.
+        with open(dataset_folder + "/dbinfos.pkl", "wb") as f:
+            pickle.dump({ desired_object : dbinfo_entries }, f)
+        print(dbinfo_entries)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate SECOND-usable dataset.")
