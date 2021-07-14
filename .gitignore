@@ -2,3 +2,4 @@
 *.ply
 data/datasets/pointnav/mp3d/v1
 data/scene_datasets/mp3d
+dataset/

@@ -16,14 +16,18 @@ import open3d as o3d
 from pyntcloud import PyntCloud
 from scipy.spatial.transform import Rotation
 
+from pathlib import Path
+import argparse
+import pickle
+
+
+def save_rgb(obs, filename):
+    plt.imshow(obs)
+    plt.savefig(filename + ".png")
+    plt.clf()
 
 def save_bboxes(objs, sensor_state, filename):
     mesh = o3d.geometry.TriangleMesh()
-
-    DESIRED_OBJ = "chair"
-    print(set([obj.category.name() for obj in objs]))
-    objs = [obj for obj in objs if obj.category.name() == DESIRED_OBJ]
-    print(f"{filename} has {len(objs)} {DESIRED_OBJ}")
         
     for obj in objs:
         bb = obj.obb
@@ -75,20 +79,65 @@ def save_pc(config, depth_obs, filename):
     # Project to camera frame 3D XYZ from 2.5D pixel X, Pixel Y, Depth
     xy_c0 = np.matmul(K_inv, xys)
     PyntCloud(pd.DataFrame(data=xy_c0[:3].T,
-        columns=["x", "y", "z"])).to_file(filename)
+        columns=["x", "y", "z"])).to_file(filename + ".ply")
+
+    # Save in KITTI PC format of X, Y, Z, Intensity, with Intensity always 1.
+    xy_c0[3] = 1
+    with open(filename + ".bin", "wb") as bin_f:
+        for e in xy_c0.T:
+            bin_f.write(e.ravel().astype(np.float32))
+
+    
+    
+def gen_entry(idx, rgb_file, pc_file, rgb_observations, objects):
+    d = {
+    "image" : {
+        "image_idx" : idx,
+        "image_path" : rgb_file + ".png",
+        "image_shape" : np.array(list(rgb_observations.shape)[:2])
+    },
+    "calib" : {
+        "P0" : np.eye(4),
+        "P1" : np.eye(4),
+        "P2" : np.eye(4),
+        "P3" : np.eye(4),
+        "R0_rect" : np.eye(4),
+        "Tr_velo_to_cam" : np.eye(4),
+        "Tr_imu_to_velo" : np.eye(4)
+    },
+    "point_cloud" : {
+        "num_features" : 4,
+        "velodyne_path" : pc_file + ".bin"
+    },
+    "annos" : {
+        "name" : [o.category.name() for o in objects],
+        "truncated" : np.zeros(len(objects)),
+        "occluded" : np.zeros(len(objects)),
+        "alpha" : np.ones(len(objects)) * -10,
+        "bbox" : np.zeros((4, len(objects))),
+        "dimensions" : [o.obb.half_extents for o in objects],
+        "location" : [o.obb.center for o in objects],
+        "rotation_y" : np.zeros(len(objects)),
+        "score" : np.zeros(len(objects)),
+        "index" : list(range(len(objects))),
+        "group_ids" : list(range(len(objects))),
+        "difficulty" : np.zeros(len(objects)),
+        "num_points_in_gt" : np.zeros(len(objects)),
+    }
+    }
+    return d
 
 
-
-def main():
+def main(dataset_folder, desired_object):
     config=habitat.get_config("task_mp3d.yaml")
     with habitat.Env(
         config=config
     ) as env:
-
-
         print("Environment creation successful")
         print("Agent acting inside environment.")
-        for episode_idx in range(10):
+        episode_idx = 0
+        data_entries = []
+        while episode_idx < 10:
             observations = env.reset()
 
             scene = env.sim.semantic_annotations()
@@ -102,26 +151,41 @@ def main():
             # Extract the unique objects, get their Object Bounding Boxes.
             # https://aihabitat.org/docs/habitat-sim/habitat_sim.geo.OBB.html
             distinct_objects = [instance_id_to_obj[instance_id] for instance_id in set(observations["semantic"].flatten())]
-            
-            save_bboxes(distinct_objects,
-                        env.sim.get_agent_state().sensor_states["depth"], 
-                        "bbs{}".format(episode_idx))
-            save_pc(config, 
-                    observations["depth"], 
-                    "pointcloud{}.ply".format(episode_idx))
 
-            plt.imshow(observations["rgb"])
-            plt.savefig("episode{}rgb.png".format(episode_idx))
-            plt.clf()
-            plt.imshow(to_catagory_id(observations["semantic"]))
-            plt.colorbar()
-            plt.savefig("episode{}semantic.png".format(episode_idx))
-            plt.clf()
-            plt.imshow(observations["depth"])
-            plt.colorbar()
-            plt.savefig("episode{}depth.png".format(episode_idx))
-            plt.clf()            
+            filtered_objects = [obj for obj in distinct_objects if obj.category.name() == desired_object]
+            if len(filtered_objects) <= 0:
+                continue
+
+            print(f"Episode {episode_idx} has {len(filtered_objects)} {desired_object}")
+            
+
+            rgb_file = dataset_folder + f"/rgb{episode_idx:06d}"
+            save_rgb(observations["rgb"], rgb_file)
+            bbox_file = dataset_folder + f"/bbs{episode_idx:06d}"
+            save_bboxes(filtered_objects,
+                        env.sim.get_agent_state().sensor_states["depth"], 
+                        bbox_file)
+            pc_file = dataset_folder + f"/pointcloud{episode_idx:06d}"
+            save_pc(config,
+                    observations["depth"],
+                    pc_file)
+
+            data_entries.append(gen_entry(episode_idx, 
+                                          rgb_file, 
+                                          pc_file, 
+                                          observations["rgb"], 
+                                          distinct_objects))
+            episode_idx += 1
+        
+        # Save to database.
+        with open(dataset_folder + "/database.pkl", "wb") as db:
+            pickle.dump(data_entries, db)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Generate SECOND-usable dataset.")
+    parser.add_argument('--dataset_folder', default="dataset", help="Dataset folder")
+    parser.add_argument('--object', default="chair", help="Matterport object name")
+    args = parser.parse_args()
+    Path(args.dataset_folder).mkdir(parents=True, exist_ok=True)
+    main(args.dataset_folder, args.object)
