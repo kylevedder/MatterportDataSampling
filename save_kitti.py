@@ -3,6 +3,8 @@ from scipy.spatial.transform import Rotation
 import open3d as o3d
 import pandas as pd
 from pyntcloud import PyntCloud
+from pathlib import Path
+import os
 
 class SaveKitti:
   def __init__(self, root_path):
@@ -14,7 +16,7 @@ class SaveKitti:
     self.Tr_imu_to_velo = np.zeros((3, 4)).reshape((12,))
 
 
-  def save_calibration(self, idx):
+  def _save_calibration(self, idx):
     name_datas = [("P0", self.P0), 
                   ("P1", self.P1), 
                   ("P2", self.P2), 
@@ -22,18 +24,22 @@ class SaveKitti:
                   ("R0_rect", self.R0_rect), 
                   ("Tr_velo_to_cam", self.Tr_velo_to_cam), 
                   ("Tr_imu_to_velo", self.Tr_imu_to_velo)]
-    with open(self.root_path + f"/calib/{idx:06d}.txt") as f:
+    p = Path(self.root_path + "/calib/")
+    p.mkdir(parents=True, exist_ok=True)
+    with (p / f"{idx:06d}.txt").open('w') as f:
       for name, data in name_datas:
-        f.write(name + ": " + ' '.join(data) + '\n')      
+        f.write(name + ": " + ' '.join([str(e) for e in data]) + '\n')      
 
   
-  def save_rgb(self, rgb, idx):
+  def _save_rgb(self, rgb, idx):
     pass
 
 
-  def save_boxes(self, names, bboxes, image_bboxes, T_second_world, idx):
+  def _save_boxes(self, names, bboxes, image_bboxes, T_second_world, idx):
     mesh = o3d.geometry.TriangleMesh()
-    with open(self.root_path + f"/label_2/{idx:06d}.txt") as f:
+    p = Path(self.root_path + "/label_2/")
+    p.mkdir(parents=True, exist_ok=True)
+    with (p / f"{idx:06d}.txt").open('w') as f:
       for name, bb, img_bb in zip(names, bboxes, image_bboxes):
         # name # idx 0
         truncation = 0 # idx 1
@@ -41,11 +47,11 @@ class SaveKitti:
         left, top, right, bottom = img_bb # idx 4, 5, 6, 7
         l, w, h = bb.half_extents # idx 8, 9, 10
         x, y, z = bb.center # 11, 12, 13
-        rotation_y = Rotation.from_quat(*bb.rotation).as_euler('y', degrees=False) # idx 14
+        rotation_y = Rotation.from_quat(list(bb.rotation)).as_euler('yxz', degrees=False)[0] # idx 14
         alpha = rotation_y # This is wrong, should fix. idx 3
         score = 1 # idx 15
         data = [name, truncation, occlusion, alpha, left, top, right, bottom, h, w, l, x, y, z, rotation_y, score]
-        f.write(' '.join(data) + "\n")
+        f.write(' '.join([str(e) for e in data]) + "\n")
 
         # Save .ply for visualization
         box = o3d.geometry.TriangleMesh.create_box(*(bb.half_extents * 2))
@@ -58,17 +64,26 @@ class SaveKitti:
 
     # Put mesh in camera frame
     mesh.transform(T_second_world)
-    o3d.io.write_triangle_mesh(self.root_path + f"/label_2/{idx:06d}.ply", mesh)
+    o3d.io.write_triangle_mesh(str(p / f"{idx:06d}.ply"), mesh)
         
 
-  def save_pc(self, pc, idx):
+  def _save_pc(self, pc, idx):
+    p = Path(self.root_path + "/velodyne/")
+    p.mkdir(parents=True, exist_ok=True)
     PyntCloud(pd.DataFrame(data=pc[:3].T,
         columns=["x", "y", "z"]))\
-        .to_file(self.root_path +f"/velodyne/{idx:06d}.ply")
+        .to_file(str(p / f"{idx:06d}.ply"))
     # Save in KITTI PC binary format of X, Y, Z, Intensity, with Intensity always 1.
     pc[3] = 1
-    with open(self.root_path +f"/velodyne/{idx:06d}.bin", "wb") as bin_f:
+    with (p / f"{idx:06d}.bin").open("wb") as bin_f:
         bin_f.write(pc.T.ravel().astype(np.float32))
+    
+    # Create symlink from velodyne_reduced/ to velodyne/
+    p_sym = Path(self.root_path + "/velodyne_reduced/")
+    p_sym.mkdir(parents=True, exist_ok=True)
+    (p_sym / f"{idx:06d}.bin").unlink(missing_ok=True)
+    os.symlink(f"../velodyne/{idx:06d}.bin", str(p_sym / f"{idx:06d}.bin"))
+
 
 
   def save_instance(self, idx, rgb, names, bboxes, image_bboxes, pc, T_second_camera, T_camera_world, T_camera_img):
@@ -76,11 +91,9 @@ class SaveKitti:
     assert T_camera_world.shape == (4, 4)
     self.Tr_velo_to_cam = T_camera_world[:3].reshape((12,))
     self.P2 = T_camera_img.T[:3].reshape((12,))
-
-
-    self.save_calibration(idx)
-    self.save_rgb(rgb, idx)
-    self.save_boxes(names, bboxes, image_bboxes, idx)
-    self.save_pc(pc, idx)
+    self._save_calibration(idx)
+    self._save_rgb(rgb, idx)
+    self._save_boxes(names, bboxes, image_bboxes, T_second_camera @ T_camera_world, idx)
+    self._save_pc(pc, idx)
 
 

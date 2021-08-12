@@ -16,8 +16,6 @@ import open3d as o3d
 from pyntcloud import PyntCloud
 from scipy.spatial.transform import Rotation
 
-from save_kitti import SaveKitti
-
 from pathlib import Path
 import argparse
 import pickle
@@ -114,7 +112,7 @@ def transform_camera_frame(data, sensor_state):
     return arr.T[0,:3]
 
 
-def make_bboxes(objs, rgb_obs, sensor_hfov_deg, sensor_state, filename, save_bbox_img=False):
+def save_bboxes(objs, rgb_obs, sensor_hfov_deg, sensor_state, filename, save_bbox_img=False):
     mesh = o3d.geometry.TriangleMesh()
 
     W, H, d = rgb_obs.shape
@@ -134,9 +132,26 @@ def make_bboxes(objs, rgb_obs, sensor_hfov_deg, sensor_state, filename, save_bbo
         mesh += box
         corners_lst.append(object_to_image_bbox(obj, rgb_obs, sensor_state, sensor_hfov_deg))
     
-    bboxes = [obj.obb for obj in objs]
-    
-    return bboxes, corners_lst
+    # Convert mesh from world frame to camera frame
+    _, T_camera_world = gen_cam_frame_transform_matrices(sensor_state)
+    # Convert mesh from camera frame to SECOND frame
+    T_second_camera = gen_second_transformation(4)
+
+    # Put mesh in camera frame
+    mesh.transform(T_camera_world)
+    mesh.transform(T_second_camera)
+    o3d.io.write_triangle_mesh(filename+".ply", mesh)
+
+    if save_bbox_img:
+        plt.imshow(rgb_obs)
+        for cs in corners_lst:
+            left, top, right, bottom = cs
+            width = right - left
+            height = bottom - top
+            rect = plt.Rectangle((left, top), width, height,
+                        facecolor="green", alpha=0.5)
+            plt.gca().add_patch(rect)
+        plt.savefig(filename + ".jpg")
 
 
 def save_pc(sensor_hfov_deg, depth_obs, filename):
@@ -166,15 +181,13 @@ def save_pc(sensor_hfov_deg, depth_obs, filename):
     # then project into SECOND frame.
     xy_c0 = T_second_camera @ T_camera_world @ xys
 
-    return xy_c0
+    PyntCloud(pd.DataFrame(data=xy_c0[:3].T,
+        columns=["x", "y", "z"])).to_file(filename + ".ply")
 
-    # PyntCloud(pd.DataFrame(data=xy_c0[:3].T,
-    #     columns=["x", "y", "z"])).to_file(filename + ".ply")
-
-    # # Save in KITTI PC binary format of X, Y, Z, Intensity, with Intensity always 1.
-    # xy_c0[3] = 1
-    # with open(filename + ".bin", "wb") as bin_f:
-    #     bin_f.write(xy_c0.T.ravel().astype(np.float32))
+    # Save in KITTI PC binary format of X, Y, Z, Intensity, with Intensity always 1.
+    xy_c0[3] = 1
+    with open(filename + ".bin", "wb") as bin_f:
+        bin_f.write(xy_c0.T.ravel().astype(np.float32))
 
 def obj_in_height_range(obj, depth_sensor_state):
     x, y, z = transform_camera_frame(obj.obb.center, depth_sensor_state)
@@ -269,14 +282,20 @@ def main(dataset_folder, desired_object):
             print(f"Episode {episode_idx} has {len(filtered_objects)} {desired_object}")
             
 
-            #save_rgb(observations["rgb"], rgb_file)
+            rgb_file = dataset_folder + f"/rgb{episode_idx:06d}"
+            depth_file = dataset_folder + f"/depth{episode_idx:06d}"
+            save_rgb(observations["rgb"], rgb_file)
             # save_rgb(observations["depth"], depth_file)
+            bbox_file = dataset_folder + f"/bbs{episode_idx:06d}"
             save_bboxes(filtered_objects,
                         observations["rgb"],
                         depth_hfov,
-                        depth_sensor_state)
+                        depth_sensor_state, 
+                        bbox_file)
+            pc_file = dataset_folder + f"/pointcloud{episode_idx:06d}"
             save_pc(depth_hfov,
-                    observations["depth"])
+                    observations["depth"],
+                    pc_file)
 
             info_entry, dbinfo_entries_sublist = gen_entries(depth_sensor_state,
                                                             episode_idx, 
@@ -306,7 +325,7 @@ def main(dataset_folder, desired_object):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate SECOND-usable dataset.")
-    parser.add_argument('--dataset_folder', default="dataset", help="Dataset folder")
+    parser.add_argument('--dataset_folder', default="dataset_second", help="Dataset folder")
     parser.add_argument('--object', default="chair", help="Matterport object name")
     args = parser.parse_args()
     Path(args.dataset_folder).mkdir(parents=True, exist_ok=True)
