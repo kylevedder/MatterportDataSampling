@@ -12,7 +12,7 @@ class SaveData:
   def __init__(self, root_path):
     self.root_path = root_path
 
-  def _points_to_box(self, points, idx, num):
+  def _points_to_box(self, points):
     assert points.shape == (8, 3)
     height = points[:, 2].max() - points[:, 2].min()
 
@@ -90,7 +90,6 @@ class SaveData:
 
   def _save_boxes(self, names, bboxes, rgb_img, T_second_world, T_image_second, idx):
     mesh = o3d.geometry.TriangleMesh()
-    num_valid_boxes = 0
     boxes = []
     for name, bb in zip(names, bboxes):
       # Bounding boxes are not stored in l,w,h format; they are stored in decending order
@@ -101,7 +100,7 @@ class SaveData:
       box.rotate(Rotation.from_quat(list(bb.rotation)).as_matrix(), box.get_center())
       box.translate(tuple(bb.center), relative=False)
       box.transform(T_second_world)
-      center, l, w, h, yaw = self._points_to_box(np.asarray(box.vertices), idx, num_valid_boxes)
+      center, l, w, h, yaw = self._points_to_box(np.asarray(box.vertices))
       if not self._is_valid_box(center):
         continue
       box = o3d.geometry.TriangleMesh.create_box(l, w, h)
@@ -121,18 +120,23 @@ class SaveData:
     return boxes
         
 
-  def _save_pc(self, pc, idx):
+  def _save_pc(self, pc, T_second_camera, idx):
+    pc = T_second_camera @ pc
+    # Save with X, Y, Z info only.
+    pc = pc[:3].T.astype(np.float32)
+
+    # Chop below height cutoff.
     kMaxHeightCutoff = 2
+    pc = pc[pc[:,2] < kMaxHeightCutoff]
+
     p = Path(self.root_path + "/pc/")
     p.mkdir(parents=True, exist_ok=True)
-    pc = pc.T[pc[2] < kMaxHeightCutoff].T
-    PyntCloud(pd.DataFrame(data=pc[:3].T,
+    PyntCloud(pd.DataFrame(data=pc,
         columns=["x", "y", "z"]))\
         .to_file(str(p / f"{idx:06d}.ply"))
-    # Save in KITTI PC binary format of X, Y, Z, Intensity, with Intensity always 1.
-    pc[3] = 1
+    
     with (p / f"{idx:06d}.bin").open("wb") as bin_f:
-      joblib.dump(pc.ravel().astype(np.float32), bin_f)
+      joblib.dump(pc, bin_f)
 
 
   def save_instance(self, idx, rgb_img, names, bboxes, pc, T_second_camera, T_camera_second, T_camera_world, T_image_camera):
@@ -145,7 +149,7 @@ class SaveData:
                              T_image_camera @ T_camera_second, 
                              idx)
     if boxes.shape[0] > 0:
-      self._save_pc(pc, idx)
+      self._save_pc(pc, T_second_camera, idx)
     return boxes.shape[0]
 
 

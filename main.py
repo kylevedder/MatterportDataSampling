@@ -56,7 +56,7 @@ def gen_cam_frame_transform_matrices(sensor_state):
     return T_world_camera, T_camera_world
 
 
-def make_pc(depth_obs, T_second_camera):
+def make_pc(depth_obs):
     # From https://aihabitat.org/docs/habitat-api/view-transform-warp.html
     # Assumes width and height are same for simplicity.
     W, H, d = depth_obs.shape
@@ -73,9 +73,8 @@ def make_pc(depth_obs, T_second_camera):
     ys = ys.reshape(1, W, H)
     xys = np.vstack((xs * depth , ys * depth, -depth, np.ones(depth.shape)))
     xys = xys.reshape(4, -1)  # Flatten to 4 by (W*H) matrix.
-    # Project to camera frame 3D XYZ from 2.5D pixel X, Pixel Y, Depth, 
-    # then project into SECOND frame.
-    return T_second_camera @ xys
+    # Pixel X, Pixel Y, Depth
+    return xys
 
 
 def main(dataset_folder, desired_object):
@@ -116,8 +115,7 @@ def main(dataset_folder, desired_object):
             
             names = [obj.category.name() for obj in filtered_objects]
             bboxes = [obj.obb for obj in filtered_objects] 
-            pc = make_pc(observations["depth"], 
-                         T_second_camera)
+            pc = make_pc(observations["depth"])
             num_saved_boxes = save_kitti.save_instance(episode_idx, 
                                                        observations["rgb"], 
                                                        names, 
