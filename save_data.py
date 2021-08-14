@@ -122,8 +122,7 @@ class SaveData:
 
   def _save_pc(self, pc, T_second_camera, idx):
     pc = T_second_camera @ pc
-    # Save with X, Y, Z info only.
-    pc = pc[:3].T.astype(np.float32)
+    pc = pc.T.astype(np.float32)
 
     # Chop below height cutoff.
     kMaxHeightCutoff = 2
@@ -131,13 +130,28 @@ class SaveData:
 
     p = Path(self.root_path + "/pc/")
     p.mkdir(parents=True, exist_ok=True)
-    PyntCloud(pd.DataFrame(data=pc,
+    # Save with X, Y, Z info only.
+    PyntCloud(pd.DataFrame(data=pc[:,:3],
         columns=["x", "y", "z"]))\
         .to_file(str(p / f"{idx:06d}.ply"))
     
+    # Save with X, Y, Z, Intensity info.
+    pc[:,3] = 1
     with (p / f"{idx:06d}.bin").open("wb") as bin_f:
+      print(pc.shape)
       joblib.dump(pc, bin_f)
 
+  def _save_transforms(self, idx, T_second_camera, T_camera_second, T_camera_world, T_image_camera):
+    p = Path(self.root_path + "/transforms/")
+    p.mkdir(parents=True, exist_ok=True)
+    with (p / f"T_second_camera{idx:06d}.bin").open("wb") as bin_f:
+      joblib.dump(T_second_camera, bin_f)
+    with (p / f"T_camera_second{idx:06d}.bin").open("wb") as bin_f:
+      joblib.dump(T_camera_second, bin_f)
+    with (p / f"T_camera_world{idx:06d}.bin").open("wb") as bin_f:
+      joblib.dump(T_camera_world, bin_f)
+    with (p / f"T_image_camera{idx:06d}.bin").open("wb") as bin_f:
+      joblib.dump(T_image_camera, bin_f)
 
   def save_instance(self, idx, rgb_img, names, bboxes, pc, T_second_camera, T_camera_second, T_camera_world, T_image_camera):
     assert T_image_camera.shape == (4, 4)
