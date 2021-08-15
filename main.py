@@ -77,7 +77,7 @@ def make_pc(depth_obs):
     return xys
 
 
-def main(dataset_folder, desired_object):
+def main(dataset_folder, desired_object, num_scenes):
     config=habitat.get_config("task_mp3d.yaml")
     with habitat.Env(
         config=config
@@ -88,8 +88,8 @@ def main(dataset_folder, desired_object):
 
         save_kitti = SaveData(dataset_folder)
         episode_idx = 0
-        while episode_idx < 55:
-            # observations = env.reset()
+        while episode_idx < num_scenes:
+            observations = env.reset()
 
             scene = env.sim.semantic_annotations()
             depth_sensor_state = env.sim.get_agent_state().sensor_states["depth"]
@@ -139,6 +139,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate SECOND-usable dataset.")
     parser.add_argument('--dataset_folder', default="dataset/training", help="Dataset folder")
     parser.add_argument('--object', default="chair", help="Matterport object name")
+    parser.add_argument('--num_scenes', type=int, default=7500, help="Number of scenes")
     args = parser.parse_args()
     Path(args.dataset_folder).mkdir(parents=True, exist_ok=True)
-    main(args.dataset_folder, args.object)
+    main(args.dataset_folder, args.object, args.num_scenes)

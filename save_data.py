@@ -88,7 +88,7 @@ class SaveData:
 
     
 
-  def _save_boxes(self, names, bboxes, rgb_img, T_second_world, T_image_second, idx):
+  def _save_boxes(self, names, bboxes, rgb_img, T_second_world, T_image_second, idx, kSaveVisualization=False):
     mesh = o3d.geometry.TriangleMesh()
     boxes = []
     for name, bb in zip(names, bboxes):
@@ -116,27 +116,32 @@ class SaveData:
       p.mkdir(parents=True, exist_ok=True)
       with (p / f"{idx:06d}.txt").open('wb') as f:
         joblib.dump(boxes, f)
-      o3d.io.write_triangle_mesh(str(p / f"{idx:06d}.ply"), mesh)
+      if kSaveVisualization:
+        o3d.io.write_triangle_mesh(str(p / f"{idx:06d}.ply"), mesh)
     return boxes
         
 
-  def _save_pc(self, pc, T_second_camera, idx):
+  def _save_pc(self, pc, T_second_camera, idx, kSaveVisualization=False):
     pc = T_second_camera @ pc
     pc = pc.T.astype(np.float32)
+    pc[:,3] = 1    
 
     # Chop below height cutoff.
     kMaxHeightCutoff = 2
     pc = pc[pc[:,2] < kMaxHeightCutoff]
 
+    kSubsetData = 5 # 1 / kSubsetData fraction
+    pc = pc[0::kSubsetData]
+
     p = Path(self.root_path + "/pc/")
     p.mkdir(parents=True, exist_ok=True)
-    # Save with X, Y, Z info only.
-    PyntCloud(pd.DataFrame(data=pc[:,:3],
-        columns=["x", "y", "z"]))\
-        .to_file(str(p / f"{idx:06d}.ply"))
+    if kSaveVisualization:
+      # Save with X, Y, Z info only.
+      PyntCloud(pd.DataFrame(data=pc[:,:3],
+          columns=["x", "y", "z"]))\
+          .to_file(str(p / f"{idx:06d}.ply"))
     
     # Save with X, Y, Z, Intensity info.
-    pc[:,3] = 1
     with (p / f"{idx:06d}.bin").open("wb") as bin_f:
       print(pc.shape)
       joblib.dump(pc, bin_f)
@@ -156,14 +161,16 @@ class SaveData:
   def save_instance(self, idx, rgb_img, names, bboxes, pc, T_second_camera, T_camera_second, T_camera_world, T_image_camera):
     assert T_image_camera.shape == (4, 4)
     assert T_camera_world.shape == (4, 4)
+    kSaveVisualization = False
     boxes = self._save_boxes(names, 
                              bboxes, 
                              rgb_img, 
                              T_second_camera @ T_camera_world, 
                              T_image_camera @ T_camera_second, 
-                             idx)
+                             idx,
+                             kSaveVisualization)
     if boxes.shape[0] > 0:
-      self._save_pc(pc, T_second_camera, idx)
+      self._save_pc(pc, T_second_camera, idx, kSaveVisualization)
     return boxes.shape[0]
 
 
