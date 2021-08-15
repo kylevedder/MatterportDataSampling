@@ -24,14 +24,14 @@ from pathlib import Path
 import argparse
 
 
-def gen_second_transformation(num_dim):
+def gen_robot_transformation(num_dim):
     # Coordinate transform puts data in standard right hand rule robot frame.
     # https://en.wikipedia.org/wiki/Right-hand_rule#Coordinates
-    T_second_camera = np.eye(num_dim)
-    T_second_camera[[0, 1, 2]] = T_second_camera[[2, 0, 1]]
-    T_second_camera[0] *= -1
-    T_camera_second = np.linalg.inv(T_second_camera)
-    return T_second_camera, T_camera_second
+    T_robot_camera = np.eye(num_dim)
+    T_robot_camera[[0, 1, 2]] = T_robot_camera[[2, 0, 1]]
+    T_robot_camera[0] *= -1
+    T_camera_robot = np.linalg.inv(T_robot_camera)
+    return T_robot_camera, T_camera_robot
 
 
 def gen_cam_projection_matrices(sensor_hfov_deg):
@@ -59,7 +59,7 @@ def gen_cam_frame_transform_matrices(sensor_state):
 
 
 def make_pc(depth_obs,
-            T_second_camera,
+            T_robot_camera,
             height_cutoff=2,
             subsample_rows=10,
             subsample_rate=5):
@@ -81,7 +81,7 @@ def make_pc(depth_obs,
     xys = xys.reshape(4, -1)  # Flatten to 4 by (W*H) matrix.
 
     # 4 by N points
-    pc = T_second_camera @ xys
+    pc = T_robot_camera @ xys
     # N by 4 points
     pc = pc.T.astype(np.float32)
     # N by 3 points: X, Y, Z
@@ -101,8 +101,8 @@ def make_pc(depth_obs,
     return pc, image_pc
 
 
-def is_in_range(obb, T_second_world, max_distance=7):
-    center = (T_second_world @ np.array([*obb.center, 1]))[:3]
+def is_in_range(obb, T_robot_world, max_distance=7):
+    center = (T_robot_world @ np.array([*obb.center, 1]))[:3]
     x, y, z = center
     if z < -1 or z > 1:
         print("outside Z", z)
@@ -118,7 +118,7 @@ def make_bboxes(semantic_obs,
                 image_pc,
                 scene,
                 desired_objects,
-                T_second_world,
+                T_robot_world,
                 min_points_per_obj=50):
     assert semantic_obs.shape == image_pc.shape[:2]
     if type(desired_objects) is not list:
@@ -145,7 +145,7 @@ def make_bboxes(semantic_obs,
         if obj.category.name() in desired_objects
     ]
     filtered_objects = [
-        obj for obj in filtered_objects if is_in_range(obj.obb, T_second_world)
+        obj for obj in filtered_objects if is_in_range(obj.obb, T_robot_world)
     ]
     if len(filtered_objects) <= 0:
         print("No such objects found in scene")
@@ -175,21 +175,20 @@ def main(dataset_folder, desired_object, num_scenes):
 
             T_image_camera, T_camera_image = gen_cam_projection_matrices(
                 depth_hfov)
-            T_second_camera, T_camera_second = gen_second_transformation(4)
+            T_robot_camera, T_camera_robot = gen_robot_transformation(4)
             T_world_camera, T_camera_world = gen_cam_frame_transform_matrices(
                 depth_sensor_state)
 
-            pc, image_pc = make_pc(observations["depth"], T_second_camera)
+            pc, image_pc = make_pc(observations["depth"], T_robot_camera)
             names, bboxes = make_bboxes(observations["semantic"], image_pc,
                                         scene, desired_object,
-                                        T_second_camera @ T_camera_world)
+                                        T_robot_camera @ T_camera_world)
             if bboxes is None:
                 continue
 
             num_saved_boxes = save_kitti.save_instance(
                 episode_idx, observations["rgb"], names, bboxes, pc,
-                T_second_camera, T_camera_second, T_camera_world,
-                T_image_camera)
+                T_robot_camera, T_camera_robot, T_camera_world, T_image_camera)
 
             if num_saved_boxes <= 0:
                 print("No boxes met filter criteria")
@@ -205,7 +204,7 @@ def main(dataset_folder, desired_object, num_scenes):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Generate SECOND-usable dataset.")
+        description="Generate Open3D's PointPillars-usable dataset.")
     parser.add_argument('--dataset_folder',
                         default="dataset/training",
                         help="Dataset folder")

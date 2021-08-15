@@ -61,13 +61,13 @@ class SaveData:
     def _is_valid_box(self, center, l, w, h, yaw):
         return True
 
-    def _second_corners_to_image_bb(self, second_corners, rgb_img,
-                                    T_image_second):
+    def _robot_corners_to_image_bb(self, robot_corners, rgb_img,
+                                   T_image_robot):
         W, H, _ = rgb_img.shape
-        assert second_corners.shape == (8, 3)
-        second_corners = np.concatenate(
-            [second_corners, np.ones((8, 1))], axis=1)
-        c = T_image_second @ second_corners.T
+        assert robot_corners.shape == (8, 3)
+        robot_corners = np.concatenate(
+            [robot_corners, np.ones((8, 1))], axis=1)
+        c = T_image_robot @ robot_corners.T
 
         def corners_to_pixel_pos(points, W, H):
             scale_arr = np.array([[-W / 2, 0], [0, H / 2]])
@@ -89,8 +89,8 @@ class SaveData:
                     names,
                     bboxes,
                     rgb_img,
-                    T_second_world,
-                    T_image_second,
+                    T_robot_world,
+                    T_image_robot,
                     idx,
                     kSaveVisualization=False):
         mesh = o3d.geometry.TriangleMesh()
@@ -105,7 +105,7 @@ class SaveData:
                 Rotation.from_quat(list(bb.rotation)).as_matrix(),
                 box.get_center())
             box.translate(tuple(bb.center), relative=False)
-            box.transform(T_second_world)
+            box.transform(T_robot_world)
             center, l, w, h, yaw = self._points_to_box(np.asarray(
                 box.vertices))
             if not self._is_valid_box(center, l, w, h, yaw):
@@ -115,8 +115,8 @@ class SaveData:
                 Rotation.from_euler('z', yaw, degrees=True).as_matrix(),
                 box.get_center())
             box.translate(tuple(center), relative=False)
-            img_bb = self._second_corners_to_image_bb(np.asarray(box.vertices),
-                                                      rgb_img, T_image_second)
+            img_bb = self._robot_corners_to_image_bb(np.asarray(box.vertices),
+                                                     rgb_img, T_image_robot)
             mesh += box
             boxes.append(np.array([name, *img_bb, *center, l, w, h, yaw]))
 
@@ -144,27 +144,27 @@ class SaveData:
             print(pc.shape)
             joblib.dump(pc, bin_f)
 
-    def _save_transforms(self, idx, T_second_camera, T_camera_second,
+    def _save_transforms(self, idx, T_robot_camera, T_camera_robot,
                          T_camera_world, T_image_camera):
         p = Path(self.root_path + "/transforms/")
         p.mkdir(parents=True, exist_ok=True)
-        with (p / f"T_second_camera{idx:06d}.bin").open("wb") as bin_f:
-            joblib.dump(T_second_camera, bin_f)
-        with (p / f"T_camera_second{idx:06d}.bin").open("wb") as bin_f:
-            joblib.dump(T_camera_second, bin_f)
+        with (p / f"T_robot_camera{idx:06d}.bin").open("wb") as bin_f:
+            joblib.dump(T_robot_camera, bin_f)
+        with (p / f"T_camera_robot{idx:06d}.bin").open("wb") as bin_f:
+            joblib.dump(T_camera_robot, bin_f)
         with (p / f"T_camera_world{idx:06d}.bin").open("wb") as bin_f:
             joblib.dump(T_camera_world, bin_f)
         with (p / f"T_image_camera{idx:06d}.bin").open("wb") as bin_f:
             joblib.dump(T_image_camera, bin_f)
 
-    def save_instance(self, idx, rgb_img, names, bboxes, pc, T_second_camera,
-                      T_camera_second, T_camera_world, T_image_camera):
+    def save_instance(self, idx, rgb_img, names, bboxes, pc, T_robot_camera,
+                      T_camera_robot, T_camera_world, T_image_camera):
         assert T_image_camera.shape == (4, 4)
         assert T_camera_world.shape == (4, 4)
         kSaveVisualization = True
         boxes = self._save_boxes(names, bboxes, rgb_img,
-                                 T_second_camera @ T_camera_world,
-                                 T_image_camera @ T_camera_second, idx,
+                                 T_robot_camera @ T_camera_world,
+                                 T_image_camera @ T_camera_robot, idx,
                                  kSaveVisualization)
         if boxes.shape[0] > 0:
             self._save_pc(pc, idx, kSaveVisualization)
