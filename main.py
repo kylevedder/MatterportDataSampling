@@ -23,6 +23,9 @@ from save_data import SaveData
 from pathlib import Path
 import argparse
 
+from make_pc import make_pc
+from make_bboxes import make_bboxes
+
 
 def gen_robot_transformation(num_dim):
     # Coordinate transform puts data in standard right hand rule robot frame.
@@ -58,104 +61,6 @@ def gen_cam_frame_transform_matrices(sensor_state):
     return T_world_camera, T_camera_world
 
 
-def make_pc(depth_obs,
-            T_robot_camera,
-            height_cutoff=2,
-            subsample_rows=10,
-            subsample_rate=5):
-    # From https://aihabitat.org/docs/habitat-api/view-transform-warp.html
-    # Assumes width and height are same for simplicity.
-    W, H, d = depth_obs.shape
-    assert (W == H)
-    assert (d == 1)
-
-    depth_obs = depth_obs.reshape(W, H)
-
-    # Sample uniformly points in grid.
-    # [-1, 1] for x and [1, -1] for y as array indexing is y-down while world is y-up.
-    xs, ys = np.meshgrid(np.linspace(-1, 1, W), np.linspace(1, -1, H))
-    depth = depth_obs.reshape(1, H, W)
-    xs = xs.reshape(1, H, W)
-    ys = ys.reshape(1, H, W)
-    xys = np.vstack((xs * depth, ys * depth, -depth, np.ones(depth.shape)))
-    xys = xys.reshape(4, -1)  # Flatten to 4 by (W*H) matrix.
-
-    # 4 by N points
-    pc = T_robot_camera @ xys
-    # N by 4 points
-    pc = pc.T.astype(np.float32)
-    # N by 3 points: X, Y, Z
-    pc = pc[:, :3]
-    # Convert back to image shape for subsampling of rows
-    pc = pc.T.reshape(3, H, W)
-    image_pc = np.transpose(pc, (1, 2, 0))
-    pc = pc[:, 0::subsample_rows]
-    # N by 3 points
-    pc = pc.reshape(3, -1).T
-
-    # Subsample pc.
-    pc = pc[0::subsample_rate]
-    # Chop below height cutoff.
-    pc = pc[pc[:, 2] < height_cutoff]
-
-    return pc, image_pc
-
-
-def is_in_range(obb, T_robot_world, max_distance=7):
-    center = (T_robot_world @ np.array([*obb.center, 1]))[:3]
-    x, y, z = center
-    if z < -1 or z > 1:
-        print("outside Z", z)
-        return False
-    xynorm = np.linalg.norm(center[:2], 2)
-    if xynorm > max_distance:
-        print("object center dist", xynorm, "outside max dist", max_distance)
-        return False
-    return True
-
-
-def make_bboxes(semantic_obs,
-                image_pc,
-                scene,
-                desired_objects,
-                T_robot_world,
-                min_points_per_obj=50):
-    assert semantic_obs.shape == image_pc.shape[:2]
-    if type(desired_objects) is not list:
-        desired_objects = [desired_objects]
-    # Each id in the semantic image is an instance ID, which means we can lookup
-    # the actual *object* from the scene.
-    # https://aihabitat.org/docs/habitat-sim/habitat_sim.scene.SemanticObject.html
-    # Idea from https://github.com/facebookresearch/habitat-sim/issues/263#issuecomment-537295069
-    instance_id_to_obj = {
-        int(obj.id.split("_")[-1]): obj
-        for obj in scene.objects
-    }
-    # Extract the unique objects, get their Object Bounding Boxes.
-    # https://aihabitat.org/docs/habitat-sim/habitat_sim.geo.OBB.html
-    uniques, counts = np.unique(semantic_obs.flatten(), return_counts=True)
-    # Remove objects with fewer than `min_points_per_obj` observable points.
-    uniques = uniques[counts > min_points_per_obj]
-    distinct_objects = [
-        instance_id_to_obj[instance_id] for instance_id in uniques
-    ]
-
-    filtered_objects = [
-        obj for obj in distinct_objects
-        if obj.category.name() in desired_objects
-    ]
-    filtered_objects = [
-        obj for obj in filtered_objects if is_in_range(obj.obb, T_robot_world)
-    ]
-    if len(filtered_objects) <= 0:
-        print("No such objects found in scene")
-        return [], None
-
-    names = [obj.category.name() for obj in filtered_objects]
-    bboxes = [obj.obb for obj in filtered_objects]
-    return names, bboxes
-
-
 def main(dataset_folder, desired_object, num_scenes):
     config = habitat.get_config("task_mp3d.yaml")
     with habitat.Env(config=config) as env:
@@ -182,20 +87,21 @@ def main(dataset_folder, desired_object, num_scenes):
             pc, image_pc = make_pc(observations["depth"], T_robot_camera)
             names, bboxes = make_bboxes(observations["semantic"], image_pc,
                                         scene, desired_object,
-                                        T_robot_camera @ T_camera_world)
-            if bboxes is None:
+                                        T_robot_camera @ T_camera_world,
+                                        T_image_camera @ T_camera_robot)
+            if len(bboxes) <= 0:
                 continue
 
-            num_saved_boxes = save_kitti.save_instance(
-                episode_idx, observations["rgb"], names, bboxes, pc,
-                T_robot_camera, T_camera_robot, T_camera_world, T_image_camera)
-
-            if num_saved_boxes <= 0:
-                print("No boxes met filter criteria")
-                continue
+            save_kitti.save_instance(episode_idx,
+                                     names,
+                                     bboxes,
+                                     pc,
+                                     T_camera_world,
+                                     T_image_camera,
+                                     save_vis=True)
 
             print(
-                f"Episode {episode_idx} has {num_saved_boxes} of {desired_object}"
+                f"Episode {episode_idx} has {len(bboxes)}"
             )
             episode_idx += 1
 
