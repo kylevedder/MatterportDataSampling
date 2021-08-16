@@ -61,7 +61,7 @@ def gen_cam_frame_transform_matrices(sensor_state):
     return T_world_camera, T_camera_world
 
 
-def main(dataset_folder, desired_object, num_scenes):
+def main(dataset_folder, desired_object, num_scenes, save_vis):
     config = habitat.get_config("task_mp3d.yaml")
     with habitat.Env(config=config) as env:
         print("Environment creation successful")
@@ -98,11 +98,9 @@ def main(dataset_folder, desired_object, num_scenes):
                                      pc,
                                      T_camera_world,
                                      T_image_camera,
-                                     save_vis=True)
+                                     save_vis)
 
-            print(
-                f"Episode {episode_idx} has {len(bboxes)}"
-            )
+            print(f"Episode {episode_idx} has {len(bboxes)}")
             episode_idx += 1
 
         print("Done")
@@ -121,6 +119,23 @@ if __name__ == "__main__":
                         type=int,
                         default=7500,
                         help="Number of scenes")
+
+    def str2bool(v):
+        if isinstance(v, bool):
+            return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected.')
+
+    parser.add_argument("--savevis",
+                        type=str2bool,
+                        nargs='?',
+                        const=True,
+                        default=False,
+                        help="Save visualization.")
     args = parser.parse_args()
     Path(args.dataset_folder).mkdir(parents=True, exist_ok=True)
-    main(args.dataset_folder, args.object, args.num_scenes)
+    main(args.dataset_folder, args.object, args.num_scenes, args.savevis)
