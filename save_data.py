@@ -69,6 +69,5 @@ class SaveData:
         assert T_image_camera.shape == (4, 4)
         assert T_camera_world.shape == (4, 4)
         boxes = self._save_boxes(names, bboxes, idx, save_vis)
-        if boxes.shape[0] > 0:
-            self._save_pc(pc, idx, save_vis)
+        self._save_pc(pc, idx, save_vis)
         return boxes.shape[0]
