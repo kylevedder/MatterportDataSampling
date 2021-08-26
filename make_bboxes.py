@@ -53,6 +53,8 @@ def _points_to_box(points):
 
 
 def _is_valid_box(obj,
+                  box,
+                  depth_hfov,
                   center,
                   l,
                   w,
@@ -61,38 +63,48 @@ def _is_valid_box(obj,
                   img_bb,
                   img_sem,
                   img_pc,
+                  min_pts_per_object,
                   max_distance=7,
-                  min_sem_patch=0.15):
+                  min_sem_patch=0.15,
+                  min_sem_points_in_box=0.8):
+    
+    # Reject Zs too high or too low
     x, y, z = center
     if z < -1 or z > 1:
         # print("outside Z", z)
+        print("Reject: Outside Z")
         return False
+
+    # Reject centers too far away
     xynorm = np.linalg.norm(center[:2], 2)
     if xynorm > max_distance:
+        print("Reject: distance too far")
         # print("object center dist", xynorm, "outside max dist", max_distance)
         return False
-    min_x, min_y, max_x, max_y = img_bb
-    min_x, min_y, max_x, max_y = int(min_x), int(min_y), int(max_x), int(max_y)
-    total_pixels = (max_x - min_x + 1) * (max_y - min_y + 1)
-    min_x, min_y = max(min_x, 0), max(min_y, 0)
-    max_x, max_y = min(max_x,
-                       img_sem.shape[1] - 1), min(max_y, img_sem.shape[0] - 1)
-    if min_x >= max_x:
-        # print("Xs match")
-        return False
-    if min_y >= max_y:
-        # print("Ys match")
-        return False
-    semantics_patch = img_sem[min_y:max_y + 1, min_x:max_x + 1]
-    matching_arr = (semantics_patch == obj_to_id(obj)).astype(
-        np.int32).flatten()
-    # Total pixels includes pixels that hypothetically could be seen if the camera 
-    # was turned to see the entire object. This prevents a tiny sliver of the object 
-    # from being in the scene, but that sliver fills up 100% of the image bb.
-    percent_match = matching_arr.sum() / total_pixels
 
-    if percent_match < min_sem_patch:
-        # print(f"Percent match in sem patch too low: {percent_match:.4f}")
+    # Reject boxes whose center is outside of the view angle
+    # Uses the classic crossproduct sign trick to check side of viewing line
+    hov_ang = np.deg2rad(depth_hfov / 2)
+    if np.cross([np.sin(hov_ang), np.cos(hov_ang), 0], [x, np.abs(y), 0])[2] >= 0:
+        print("Reject: center outside ")
+        return False
+ 
+    # Compute points associated with that object
+    vec3d_object_points = o3d.utility.Vector3dVector(img_pc[img_sem == obj_to_id(obj)])
+
+    o3d_box = box.get_oriented_bounding_box()
+    vec3d_inside_pts = o3d_box.get_point_indices_within_bounding_box(
+        vec3d_object_points)
+
+    # If fewer than min number of points inside object, reject
+    if len(vec3d_inside_pts) < min_pts_per_object:
+        print("Reject: too few points in box")
+        return False
+
+    # If too many points associated with the box are outside it, reject
+    percent_points_in_box = len(vec3d_inside_pts) / len(vec3d_object_points)
+    if percent_points_in_box < min_sem_points_in_box:
+        print("Reject: too many outside box")
         return False
     return True
 
@@ -119,7 +131,8 @@ def _robot_corners_to_image_bb(robot_corners, W, H, T_image_robot):
     return c
 
 
-def _make_bbox(obj, img_sem, img_pc, T_robot_world, T_image_robot):
+def _make_bbox(obj, img_sem, img_pc, min_points_per_obj, depth_hfov,
+               T_robot_world, T_image_robot):
     bb = obj.obb
     W, H = img_sem.shape
     box = o3d.geometry.TriangleMesh.create_box(*(bb.half_extents * 2))
@@ -135,7 +148,8 @@ def _make_bbox(obj, img_sem, img_pc, T_robot_world, T_image_robot):
     box.translate(tuple(center), relative=False)
     img_bb = _robot_corners_to_image_bb(np.asarray(box.vertices), W, H,
                                         T_image_robot)
-    if not _is_valid_box(obj, center, l, w, h, yaw, img_bb, img_sem, img_pc):
+    if not _is_valid_box(obj, box, depth_hfov, center, l, w, h, yaw, img_bb,
+                         img_sem, img_pc, min_points_per_obj):
         return None
     return box, img_bb, center, l, w, h, yaw
 
@@ -144,9 +158,10 @@ def make_bboxes(semantic_obs,
                 image_pc,
                 scene,
                 desired_objects,
+                depth_hfov,
                 T_robot_world,
                 T_image_robot,
-                min_points_per_obj=50):
+                min_points_per_obj=35):
     assert semantic_obs.shape == image_pc.shape[:2]
     if type(desired_objects) is not list:
         desired_objects = [desired_objects]
@@ -169,8 +184,9 @@ def make_bboxes(semantic_obs,
         if obj.category.name() in desired_objects
     ]
     filtered_objects = [(obj,
-                         _make_bbox(obj, semantic_obs, image_pc, T_robot_world,
-                                    T_image_robot))
+                         _make_bbox(obj, semantic_obs, image_pc,
+                                    min_points_per_obj, depth_hfov,
+                                    T_robot_world, T_image_robot))
                         for obj in filtered_objects]
     filtered_objects = [(obj.category.name(), bbox)
                         for obj, bbox in filtered_objects if bbox is not None]

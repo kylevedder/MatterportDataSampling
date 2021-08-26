@@ -62,59 +62,68 @@ def gen_cam_frame_transform_matrices(sensor_state):
     return T_world_camera, T_camera_world
 
 
-def get_split_configs(split):
-    if split == "training":
-        return sorted(list(glob.glob("task_mp3d_train*")))
-    elif split == "test":
-        return sorted(list(glob.glob("task_mp3d_test*")))
-    raise FileNotFoundError(f"Unknown split: {split}")
+def get_split_configs():
+    l = sorted(list(glob.glob("task_mp3d*")))
+    if len(l) <= 0:
+        raise FileNotFoundError(f"No task files found")
+    return l
 
 
-def main(dataset_folder, desired_object, num_scenes, save_vis, split):
-    split_configs = get_split_configs(split)
+def main(dataset_folder, desired_object, num_scenes, save_vis):
+    train_split_name = "training"
+    test_split_name = "test"
+    split_configs = get_split_configs()
     num_episodes_per_split = num_scenes // len(split_configs)
 
     save_data = SaveData(dataset_folder)
-    total_episode_idx = 0
+
+    split_episode_idx = {train_split_name: 0, test_split_name: 0}
 
     for config_file in split_configs:
         config = habitat.get_config(config_file)
         with habitat.Env(config=config) as env:
             print("Environment creation successful")
             print("Agent acting inside environment.")
-            episode_idx = 0
-            while episode_idx < num_episodes_per_split:
-                observations = env.reset()
+            for split_name in [train_split_name, test_split_name]:
+                episode_idx = 0
+                while episode_idx < num_episodes_per_split:
+                    print("======= reset =======")
+                    observations = env.reset()
 
-                scene = env.sim.semantic_annotations()
-                depth_sensor_state = env.sim.get_agent_state().sensor_states["depth"]
-                depth_hfov = config.SIMULATOR.DEPTH_SENSOR.HFOV
+                    scene = env.sim.semantic_annotations()
+                    depth_sensor_state = env.sim.get_agent_state(
+                    ).sensor_states["depth"]
+                    depth_hfov = config.SIMULATOR.DEPTH_SENSOR.HFOV
 
-                T_image_camera, T_camera_image = gen_cam_projection_matrices(
-                    depth_hfov)
-                T_robot_camera, T_camera_robot = gen_robot_transformation(4)
-                T_world_camera, T_camera_world = gen_cam_frame_transform_matrices(
-                    depth_sensor_state)
+                    T_image_camera, T_camera_image = gen_cam_projection_matrices(
+                        depth_hfov)
+                    T_robot_camera, T_camera_robot = gen_robot_transformation(
+                        4)
+                    T_world_camera, T_camera_world = gen_cam_frame_transform_matrices(
+                        depth_sensor_state)
 
-                pc, image_pc = make_pc(observations["depth"], T_robot_camera)
-                names, bboxes = make_bboxes(observations["semantic"], image_pc, scene,
-                                            desired_object,
-                                            T_robot_camera @ T_camera_world,
-                                            T_image_camera @ T_camera_robot)
-                # if len(bboxes) <= 0:
-                #     continue
+                    pc, image_pc = make_pc(observations["depth"],
+                                           T_robot_camera)
+                    names, bboxes = make_bboxes(
+                        observations["semantic"], image_pc, scene,
+                        desired_object, depth_hfov,
+                        T_robot_camera @ T_camera_world,
+                        T_image_camera @ T_camera_robot)
+                    if len(bboxes) <= 0:
+                        continue
 
-                # plt.imshow(observations["rgb"])
-                # print(f"Image name: img{total_episode_idx:06d}.png", config_file)
-                # plt.savefig(f"img{total_episode_idx:06d}.png")
-                # plt.clf()
+                    save_data.save_instance(split_name,
+                                            split_episode_idx[split_name],
+                                            names, bboxes, pc,
+                                            observations["rgb"],
+                                            T_camera_world, T_image_camera,
+                                            save_vis)
 
-                save_data.save_instance(total_episode_idx, names, bboxes, pc, T_camera_world,
-                                        T_image_camera, save_vis)
-
-                print(f"Episode {total_episode_idx} has {len(bboxes)}")
-                episode_idx += 1
-                total_episode_idx += 1
+                    print(
+                        f"Episode {split_episode_idx[split_name]} of split {split_name} has {len(bboxes)} bboxes"
+                    )
+                    episode_idx += 1
+                    split_episode_idx[split_name] += 1
 
     print("Done")
 
@@ -125,7 +134,6 @@ if __name__ == "__main__":
     parser.add_argument('--dataset_folder',
                         default="dataset",
                         help="Dataset folder")
-    parser.add_argument('--split', default="training", help="Number of scenes")
     parser.add_argument('--object',
                         default="chair",
                         help="Matterport object name")
@@ -144,7 +152,7 @@ if __name__ == "__main__":
         else:
             raise argparse.ArgumentTypeError('Boolean value expected.')
 
-    parser.add_argument("--savevis",
+    parser.add_argument("--save_vis",
                         type=str2bool,
                         nargs='?',
                         const=True,
@@ -152,5 +160,4 @@ if __name__ == "__main__":
                         help="Save visualization.")
     args = parser.parse_args()
     Path(args.dataset_folder).mkdir(parents=True, exist_ok=True)
-    main(args.dataset_folder + "/" + args.split, args.object, args.num_scenes,
-         args.savevis, args.split)
+    main(args.dataset_folder, args.object, args.num_scenes, args.save_vis)
