@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.core.numeric import zeros_like
 import open3d as o3d
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
@@ -66,31 +67,37 @@ def _is_valid_box(obj,
                   min_pts_per_object,
                   max_distance=7,
                   min_sem_patch=0.15,
-                  min_sem_points_in_box=0.8):
-    
+                  min_sem_points_in_box=0.8,
+                  verbose=False):
+
     # Reject Zs too high or too low
     x, y, z = center
     if z < -1 or z > 1:
         # print("outside Z", z)
-        print("Reject: Outside Z")
+        if verbose:
+            print("Reject: Outside Z")
         return False
 
     # Reject centers too far away
     xynorm = np.linalg.norm(center[:2], 2)
     if xynorm > max_distance:
-        print("Reject: distance too far")
+        if verbose:
+            print("Reject: distance too far")
         # print("object center dist", xynorm, "outside max dist", max_distance)
         return False
 
     # Reject boxes whose center is outside of the view angle
     # Uses the classic crossproduct sign trick to check side of viewing line
     hov_ang = np.deg2rad(depth_hfov / 2)
-    if np.cross([np.sin(hov_ang), np.cos(hov_ang), 0], [x, np.abs(y), 0])[2] >= 0:
-        print("Reject: center outside ")
+    if np.cross([np.sin(hov_ang), np.cos(hov_ang), 0],
+                [x, np.abs(y), 0])[2] >= 0:
+        if verbose:
+            print("Reject: center outside ")
         return False
- 
+
     # Compute points associated with that object
-    vec3d_object_points = o3d.utility.Vector3dVector(img_pc[img_sem == obj_to_id(obj)])
+    vec3d_object_points = o3d.utility.Vector3dVector(
+        img_pc[img_sem == obj_to_id(obj)])
 
     o3d_box = box.get_oriented_bounding_box()
     vec3d_inside_pts = o3d_box.get_point_indices_within_bounding_box(
@@ -98,13 +105,15 @@ def _is_valid_box(obj,
 
     # If fewer than min number of points inside object, reject
     if len(vec3d_inside_pts) < min_pts_per_object:
-        print("Reject: too few points in box")
+        if verbose:
+            print("Reject: too few points in box")
         return False
 
     # If too many points associated with the box are outside it, reject
     percent_points_in_box = len(vec3d_inside_pts) / len(vec3d_object_points)
     if percent_points_in_box < min_sem_points_in_box:
-        print("Reject: too many outside box")
+        if verbose:
+            print("Reject: too many outside box")
         return False
     return True
 
@@ -154,6 +163,63 @@ def _make_bbox(obj, img_sem, img_pc, min_points_per_obj, depth_hfov,
     return box, img_bb, center, l, w, h, yaw
 
 
+def _make_pca_bbox(obj,
+                   img_sem,
+                   img_pc,
+                   min_points_per_obj,
+                   depth_hfov,
+                   T_robot_world,
+                   T_image_robot,
+                   min_side_size=0.2,
+                   max_side_size=4):
+    W, H = img_sem.shape
+    xyz_points = img_pc[img_sem == obj_to_id(obj)]
+    xy_points = xyz_points[:, :2]
+    z_points = xyz_points[:, 2]
+    z_max, z_min = z_points.max(), z_points.min()
+    h = z_max - z_min
+    if h < min_side_size:
+        print("Height too small")
+        return None
+    if h > max_side_size:
+        print("Height too tall")
+        return None
+
+    z_center = z_min + h / 2
+    xy_center = xy_points.mean(axis=0)
+    centered_xy = xy_points - xy_center
+
+    print("centered_xy.shape", centered_xy.shape)
+    eigvals, eigvecs = np.linalg.eig(np.cov(centered_xy.T))
+    # Sort eigenvectors by eigenvalue
+    eigvals, eigvecs = zip(*[(
+        val, vec) for val, vec in sorted(zip(eigvals, eigvecs), reverse=True)])
+    print(eigvals, eigvecs)
+    l = np.abs(centered_xy.dot(eigvecs[0])).max()
+    w = np.abs(centered_xy.dot(eigvecs[1])).max()
+    if l < min_side_size or w < min_side_size:
+        print("PCA side too small")
+        return None
+    if l > max_side_size or w > max_side_size:
+        print("PCA side too large")
+        return None
+    delta_x, delta_y = eigvecs[0]
+    yaw = np.rad2deg(np.arctan2(delta_y, delta_x))
+    center = [*xy_center, z_center]
+    print(l, w, h)
+    box = o3d.geometry.TriangleMesh.create_box(l, w, h)
+    box.rotate(
+        Rotation.from_euler('z', yaw, degrees=True).as_matrix(),
+        box.get_center())
+    box.translate(tuple(center), relative=False)
+    img_bb = _robot_corners_to_image_bb(np.asarray(box.vertices), W, H,
+                                        T_image_robot)
+    # if not _is_valid_box(obj, box, depth_hfov, center, l, w, h, yaw, img_bb,
+    #                      img_sem, img_pc, min_points_per_obj):
+    #     return None
+    return box, img_bb, center, l, w, h, yaw
+
+
 def make_bboxes(semantic_obs,
                 image_pc,
                 scene,
@@ -183,6 +249,11 @@ def make_bboxes(semantic_obs,
         obj for obj in distinct_objects
         if obj.category.name() in desired_objects
     ]
+    # filtered_objects = [(obj,
+    #                      _make_pca_bbox(obj, semantic_obs, image_pc,
+    #                                     min_points_per_obj, depth_hfov,
+    #                                     T_robot_world, T_image_robot))
+    #                     for obj in filtered_objects]
     filtered_objects = [(obj,
                          _make_bbox(obj, semantic_obs, image_pc,
                                     min_points_per_obj, depth_hfov,
