@@ -17,20 +17,20 @@ RUN conda update -y conda
 
 # Install prerequisites needed for spconv and second.pytorch.
 RUN conda install \
-habitat-sim \
-headless \
-pip \
+habitat-sim=0.2.0 \
+headless=1.0 \
+pip=21.1.3 \
 pytorch=1.9 \
-torchvision \
-cudnn \
-openblas-devel \
-scikit-image \
-scipy \
-numba \
-pillow \
-matplotlib \
-seaborn \
-psutil \
+torchvision=0.2.2 \
+cudnn=8.2.1.32 \
+openblas-devel=0.3.2 \
+scikit-image=0.18.2 \
+scipy=1.5.3 \
+numba=0.53.1 \
+pillow=8.2.0 \
+matplotlib=3.4.2 \
+seaborn=0.11.1\
+psutil=5.8.0 \
 -c pytorch -c conda-forge -c aihabitat -c anaconda -c defaults
 
 RUN python -c "import torch; print(torch.__version__)"
