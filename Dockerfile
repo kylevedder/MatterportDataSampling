@@ -29,7 +29,7 @@ scipy=1.5.3 \
 numba=0.53.1 \
 pillow=8.2.0 \
 matplotlib=3.4.2 \
-seaborn=0.11.1\
+seaborn=0.11.1 \
 psutil=5.8.0 \
 -c pytorch -c conda-forge -c aihabitat -c anaconda -c defaults
 
