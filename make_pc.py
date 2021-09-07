@@ -2,7 +2,8 @@ import numpy as np
 
 def make_pc(depth_obs,
             T_robot_camera,
-            height_cutoff=2,
+            height_max=2,
+            height_min=-2,
             subsample_rows=10,
             subsample_rate=5):
     # From https://aihabitat.org/docs/habitat-api/view-transform-warp.html
@@ -38,6 +39,7 @@ def make_pc(depth_obs,
     # Subsample pc.
     pc = pc[0::subsample_rate]
     # Chop below height cutoff.
-    pc = pc[pc[:, 2] < height_cutoff]
+    pc = pc[pc[:, 2] < height_max]
+    pc = pc[pc[:, 2] > height_min]
 
     return pc, image_pc
