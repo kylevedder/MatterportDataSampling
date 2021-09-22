@@ -1,8 +1,10 @@
 # Matterport Bounding Box Dataset Generator
 
+This script generates supervised datasets of the specified objects in [Matterport3D](https://niessner.github.io/Matterport/)'s house meshes, using [AIHabitat](https://aihabitat.org/) to render the views.
+
 ## Setup
 
-Setup a `data/` folder with a path to the `matterport` dataset, e.g.
+Download Matterport3D. Inside the repo, use symlinks inside the `data/` folder to link to the `matterport` dataset, e.g.
 
 ```
 data
@@ -16,7 +18,7 @@ data
 
 ## Build/Run
 
-To build a Docker container, use the provided `Dockerfile`. Following the above setup, mount the project directory as `/project` and the `/data` directory as follows:
+To build the Docker container, use the provided `Dockerfile`. Following the above setup, mount the project directory as `/project` and the `/data` directory as follows:
 
 ```
 nvidia-docker run -v `pwd`:/project -v /data:/data --rm -it habitat_sampling
