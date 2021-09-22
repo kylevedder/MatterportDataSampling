@@ -21,3 +21,5 @@ To build a Docker container, use the provided `Dockerfile`. Following the above 
 ```
 nvidia-docker run -v `pwd`:/project -v /data:/data --rm -it habitat_sampling
 ```
+
+Then run `python main.py` with optional config flags.
